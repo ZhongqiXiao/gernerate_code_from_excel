@@ -1,0 +1,44 @@
+# 虚拟环境
+venv/
+.venv/
+
+# 输出目录
+/output/
+/out*/
+
+# IDE相关文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Python缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+
+# 日志文件
+*.log
+
+# 测试相关
+.coverage
+.pytest_cache/
+
+# 其他临时文件
+*.tmp
+*.temp
+*.bak
+*.old
+
+# Excel测试数据文件（可选，根据需求决定是否忽略）
+# *.xlsx
+# !test_data.xlsx
