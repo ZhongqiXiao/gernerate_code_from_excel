@@ -3,6 +3,7 @@ from tkinter import filedialog, ttk, messagebox
 import os
 import sys
 import threading
+import concurrent.futures
 from generate_qrcode_from_excel import read_excel_in_batches, generate_qr_codes, create_a4_image
 
 class QRCodeGeneratorGUI:
@@ -116,6 +117,12 @@ class QRCodeGeneratorGUI:
         # 线程控制
         self.stop_event = threading.Event()
         self.generation_thread = None
+        
+        # 进度条定时器控制
+        self.progress_timers = []
+        
+        # 为了支持取消操作，我们需要一个方法来监控底层的并发执行
+        self.executor = None
     
     def browse_file(self):
         filename = filedialog.askopenfilename(
@@ -181,6 +188,9 @@ class QRCodeGeneratorGUI:
         # 重置线程事件
         self.stop_event.clear()
         
+        # 清空进度条定时器列表
+        self.progress_timers = []
+        
         # 启动生成线程
         self.generation_thread = threading.Thread(
             target=self.generate_qrcodes,
@@ -202,6 +212,7 @@ class QRCodeGeneratorGUI:
             strings = read_excel_in_batches(excel_file, start_row, batch_size)
             
             if self.stop_event.is_set():
+                self.root.after(0, lambda: self.log("操作已取消"))
                 return
             
             if not strings:
@@ -213,31 +224,76 @@ class QRCodeGeneratorGUI:
             
             # 2. 生成临时二维码文件目录
             temp_qr_dir = os.path.join(output_dir, 'temp_qr')
+            os.makedirs(temp_qr_dir, exist_ok=True)
             
-            # 3. 生成二维码
-            self.root.after(0, lambda: self.log("开始生成二维码..."))
-            self.root.after(0, lambda: self.update_progress(50))
+            # 3. 生成二维码（多线程处理）
+            self.root.after(0, lambda: self.log("开始生成二维码...(使用多线程加速)"))
+            self.root.after(0, lambda: self.update_progress(40))
             
             if self.stop_event.is_set():
+                self.root.after(0, lambda: self.log("操作已取消"))
                 return
+            
+            # 定期更新进度条
+            def update_qr_progress():
+                if not self.stop_event.is_set():
+                    # 估算进度
+                    if hasattr(self, 'qr_progress'):
+                        self.qr_progress = min(60, self.qr_progress + 0.5)
+                    else:
+                        self.qr_progress = 40
+                    self.root.after(0, lambda: self.update_progress(self.qr_progress))
+                    if self.qr_progress < 60:
+                        timer = self.root.after(500, update_qr_progress)
+                        self.progress_timers.append(timer)
+            
+            timer = self.root.after(500, update_qr_progress)
+            self.progress_timers.append(timer)
             
             qr_files = generate_qr_codes(strings, temp_qr_dir)
             
+            # 清除二维码生成阶段的进度条定时器
+            self._cancel_progress_timers()
+            
             if self.stop_event.is_set():
+                self.root.after(0, lambda: self.log("操作已取消"))
                 return
             
-            # 4. 生成A4图片
-            self.root.after(0, lambda: self.log("开始生成A4图片..."))
             self.root.after(0, lambda: self.update_progress(70))
             
+            # 4. 生成A4图片（多线程处理）
+            self.root.after(0, lambda: self.log("开始生成A4图片...(使用多线程加速)"))
+            
             if self.stop_event.is_set():
+                self.root.after(0, lambda: self.log("操作已取消"))
                 return
+            
+            # 定期更新进度条
+            def update_a4_progress():
+                if not self.stop_event.is_set():
+                    # 估算进度
+                    if hasattr(self, 'a4_progress'):
+                        self.a4_progress = min(95, self.a4_progress + 0.5)
+                    else:
+                        self.a4_progress = 70
+                    self.root.after(0, lambda: self.update_progress(self.a4_progress))
+                    if self.a4_progress < 95:
+                        timer = self.root.after(500, update_a4_progress)
+                        self.progress_timers.append(timer)
+            
+            timer = self.root.after(500, update_a4_progress)
+            self.progress_timers.append(timer)
             
             create_a4_image(qr_files, output_dir)
             
+            # 清除A4图片生成阶段的进度条定时器
+            self._cancel_progress_timers()
+            
             if self.stop_event.is_set():
+                self.root.after(0, lambda: self.log("操作已取消"))
                 return
             
+            # 设置最终进度为100%
             self.root.after(0, lambda: self.update_progress(100))
             self.root.after(0, lambda: self.log("所有操作完成！"))
             self.root.after(0, lambda: messagebox.showinfo("成功", "二维码生成完成！"))
@@ -247,10 +303,33 @@ class QRCodeGeneratorGUI:
             self.root.after(0, lambda: self.log(error_msg))
             self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
         finally:
+            # 清除所有进度条定时器
+            self._cancel_progress_timers()
+            
+            # 只有在发生错误或取消时才重置进度条，成功完成时保持100%
+            if self.stop_event.is_set() or not hasattr(self, '_operation_completed'):
+                self.root.after(0, lambda: self.update_progress(0))
+            
             # 恢复按钮状态
             self.root.after(0, lambda: self.generate_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.cancel_btn.config(state=tk.DISABLED))
-            self.root.after(0, lambda: self.update_progress(0))
+            
+            # 清理临时属性
+            if hasattr(self, 'qr_progress'):
+                delattr(self, 'qr_progress')
+            if hasattr(self, 'a4_progress'):
+                delattr(self, 'a4_progress')
+            if hasattr(self, '_operation_completed'):
+                delattr(self, '_operation_completed')
+    
+    def _cancel_progress_timers(self):
+        """取消所有进度条更新定时器"""
+        for timer in self.progress_timers:
+            try:
+                self.root.after_cancel(timer)
+            except:
+                pass  # 如果定时器已经被取消，忽略异常
+        self.progress_timers = []
     
     def cancel_generation(self):
         """取消生成二维码"""

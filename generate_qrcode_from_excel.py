@@ -4,8 +4,13 @@ from PIL import Image, ImageDraw, ImageFont
 import os
 import math
 import argparse
-from typing import List, Tuple
+import concurrent.futures
+from typing import List, Tuple, Dict
+import time
 
+# 设置最大线程数，根据系统CPU核心数调整
+MAX_WORKERS = os.cpu_count() or 4
+BATCH_SIZE_QR = 100  # 二维码生成的批处理大小
 def read_excel_in_batches(file_path: str, start_row: int, batch_size: int = 1000) -> List[str]:
     """
     分批读取Excel文件，避免内存溢出
@@ -60,92 +65,163 @@ def create_qr_code(data: str, output_path: str) -> None:
     # 保存高清二维码，提高DPI值
     img.save(output_path, dpi=(600, 600))
 
-def generate_qr_codes(strings: List[str], output_dir: str) -> List[str]:
+def generate_qr_code_worker(data_group: Tuple[str, str, int, int]) -> Tuple[str, int, int]:
     """
-    每10个字符串生成一个二维码
+    线程工作函数，用于并行生成二维码
+    """
+    data, output_dir, start_idx, end_idx = data_group
+    qr_file = os.path.join(output_dir, f"qr_{start_idx}_{end_idx}.png")
+    create_qr_code(data, qr_file)
+    return (qr_file, start_idx, end_idx)
+
+def generate_qr_codes(strings: List[str], output_dir: str) -> List[Tuple[str, int, int]]:
+    """
+    使用多线程并行生成二维码，每10个字符串生成一个二维码
     """
     qr_files = []
     
     # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
     
-    # 分组处理字符串（每10个一组）
+    # 准备工作任务
+    tasks = []
     for i in range(0, len(strings), 10):
-        group = strings[i:i+10]
+        end_i = min(i + 10, len(strings))
+        group = strings[i:end_i]
         data = ";".join(group)
+        tasks.append((data, output_dir, i+1, end_i))
+    
+    # 分批提交任务到线程池，避免一次性创建过多任务
+    # 注意：使用线程池而非进程池，因为GIL在图像处理时会释放
+    start_time = time.time()
+    
+    # 使用有序字典来保存结果，确保顺序正确
+    result_dict = {}
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # 提交所有任务
+        future_to_idx = {
+            executor.submit(generate_qr_code_worker, task): i 
+            for i, task in enumerate(tasks)
+        }
         
-        # 生成二维码文件路径
-        qr_file = os.path.join(output_dir, f"qr_{i+1}_{min(i+10, len(strings))}.png")
-        
-        # 创建二维码
-        create_qr_code(data, qr_file)
-        qr_files.append((qr_file, i+1, min(i+10, len(strings))))
+        # 收集结果
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                result_dict[idx] = result
+            except Exception as e:
+                print(f"生成二维码时出错 (任务 {idx}): {e}")
+    
+    # 按原始顺序重建结果列表
+    qr_files = [result_dict[i] for i in sorted(result_dict.keys())]
+    
+    end_time = time.time()
+    print(f"生成{len(qr_files)}个二维码耗时: {end_time - start_time:.2f}秒")
     
     return qr_files
 
-def create_a4_image(qr_files: List[Tuple[str, int, int]], output_dir: str) -> None:
+def process_a4_page_worker(page_data: Tuple[List[Tuple[str, int, int]], str, int, int]) -> str:
     """
-    每15个二维码生成一个A4大小的图片
+    线程工作函数，用于并行处理A4页面
     """
-    # A4纸张尺寸（像素，600 dpi，更高分辨率适合打印）
+    qr_files_group, output_dir, start_i, end_i = page_data
+    
+    # A4纸张尺寸（像素，600 dpi）
     a4_width = 4960
     a4_height = 7016
     
-    # 每15个二维码一组
-    for i in range(0, len(qr_files), 15):
-        group = qr_files[i:i+15]
-        
-        # 创建A4大小的白色背景图片
-        a4_image = Image.new('RGB', (a4_width, a4_height), color='white')
-        draw = ImageDraw.Draw(a4_image)
-        
-        # 计算二维码的位置（尝试3行5列的布局）
-        cols = 3
-        rows = math.ceil(len(group) / cols)
-        qr_width = (a4_width - 400) // cols  # 左右各留200像素边距，增加边距避免裁剪
-        qr_height = (a4_height - 400) // rows  # 上下各留200像素边距，增加边距避免裁剪
-        
-        # 放置二维码
-        for idx, (qr_file, start_num, end_num) in enumerate(group):
+    # 创建A4大小的白色背景图片
+    a4_image = Image.new('RGB', (a4_width, a4_height), color='white')
+    draw = ImageDraw.Draw(a4_image)
+    
+    # 计算二维码的位置（3行5列的布局）
+    cols = 3
+    rows = math.ceil(len(qr_files_group) / cols)
+    qr_width = (a4_width - 400) // cols  # 左右各留200像素边距
+    qr_height = (a4_height - 400) // rows  # 上下各留200像素边距
+    
+    # 放置二维码
+    for idx, (qr_file, start_num, end_num) in enumerate(qr_files_group):
+        try:
+            # 打开二维码图片
+            qr_img = Image.open(qr_file)
+            # 调整二维码大小，使用LANCZOS算法保持高质量
+            qr_img = qr_img.resize((qr_width, qr_height), Image.Resampling.LANCZOS)
+            
+            # 计算位置
+            col = idx % cols
+            row = idx // cols
+            x = 200 + col * qr_width  # 增加边距
+            y = 200 + row * qr_height  # 增加边距
+            
+            # 粘贴二维码到A4图片
+            a4_image.paste(qr_img, (x, y))
+            
+            # 添加文字说明（起止编号）
             try:
-                # 打开二维码图片
-                qr_img = Image.open(qr_file)
-                # 调整二维码大小，使用LANCZOS算法保持高质量
-                qr_img = qr_img.resize((qr_width, qr_height), Image.Resampling.LANCZOS)
-                
-                # 计算位置
-                col = idx % cols
-                row = idx // cols
-                x = 200 + col * qr_width  # 增加边距
-                y = 200 + row * qr_height  # 增加边距
-                
-                # 粘贴二维码到A4图片
-                a4_image.paste(qr_img, (x, y))
-                
-                # 添加文字说明（起止编号）
-                try:
-                    # 尝试使用系统字体，增大字体大小
-                    font = ImageFont.truetype("arial.ttf", 48)  # 增大字体大小
-                except:
-                    # 如果找不到字体，使用默认字体
-                    font = ImageFont.load_default()
-                
-                text = f"{start_num}-{end_num}"
-                text_width, text_height = draw.textbbox((0, 0), text, font=font)[2:4]
-                text_x = x + (qr_width - text_width) // 2
-                text_y = y + qr_height + 20  # 增加与二维码的间距
-                draw.text((text_x, text_y), text, fill='black', font=font)
-                
-            except Exception as e:
-                print(f"处理二维码 {qr_file} 时出错: {e}")
+                # 尝试使用系统字体，增大字体大小
+                font = ImageFont.truetype("arial.ttf", 48)  # 增大字体大小
+            except:
+                # 如果找不到字体，使用默认字体
+                font = ImageFont.load_default()
+            
+            text = f"{start_num}-{end_num}"
+            text_width, text_height = draw.textbbox((0, 0), text, font=font)[2:4]
+            text_x = x + (qr_width - text_width) // 2
+            text_y = y + qr_height + 20  # 增加与二维码的间距
+            draw.text((text_x, text_y), text, fill='black', font=font)
+            
+        except Exception as e:
+            print(f"处理二维码 {qr_file} 时出错: {e}")
+    
+    # 保存A4图片
+    if qr_files_group:
+        start_num = qr_files_group[0][1]
+        end_num = qr_files_group[-1][2]
+        output_file = os.path.join(output_dir, f"{start_num}-{end_num}.png")
+        a4_image.save(output_file, dpi=(600, 600), quality=95)  # 略微降低quality提升速度
+        return output_file
+    
+    return ""
+
+def create_a4_image(qr_files: List[Tuple[str, int, int]], output_dir: str) -> None:
+    """
+    使用多线程并行生成A4大小的图片，每15个二维码生成一个图片
+    """
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 准备工作任务
+    tasks = []
+    for i in range(0, len(qr_files), 15):
+        end_i = min(i + 15, len(qr_files))
+        group = qr_files[i:end_i]
+        tasks.append((group, output_dir, i, end_i))
+    
+    # 使用多线程并行处理A4页面
+    start_time = time.time()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, 2)) as executor:  # 图像合成对内存要求较高，限制线程数
+        # 提交所有任务
+        future_to_idx = {
+            executor.submit(process_a4_page_worker, task): i 
+            for i, task in enumerate(tasks)
+        }
         
-        # 保存A4图片，使用600 DPI提高打印质量
-        if group:
-            start_num = group[0][1]
-            end_num = group[-1][2]
-            output_file = os.path.join(output_dir, f"{start_num}-{end_num}.png")
-            a4_image.save(output_file, dpi=(600, 600), quality=100)  # 增加quality参数
-            print(f"已生成图片: {output_file}")
+        # 收集结果
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                if result:
+                    print(f"已生成图片: {result}")
+            except Exception as e:
+                print(f"生成A4图片时出错 (页面 {idx}): {e}")
+    
+    end_time = time.time()
+    print(f"生成A4图片耗时: {end_time - start_time:.2f}秒")
 
 def main():
     # 解析命令行参数
@@ -157,9 +233,14 @@ def main():
     args = parser.parse_args()
     
     try:
+        total_start_time = time.time()
+        
         # 1. 分批读取Excel文件
         print(f"开始从第{args.n}行读取Excel文件...")
+        start_time = time.time()
         strings = read_excel_in_batches(args.excel_file, args.n, args.batch_size)
+        end_time = time.time()
+        print(f"读取Excel文件耗时: {end_time - start_time:.2f}秒")
         
         if not strings:
             print("没有读取到任何数据")
@@ -178,7 +259,8 @@ def main():
         print("开始生成A4图片...")
         create_a4_image(qr_files, args.output_dir)
         
-        print("所有操作完成！")
+        total_end_time = time.time()
+        print(f"所有操作完成！总耗时: {total_end_time - total_start_time:.2f}秒")
         
     except Exception as e:
         print(f"程序执行出错: {e}")
