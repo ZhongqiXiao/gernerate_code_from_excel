@@ -162,5 +162,6 @@ INFO_MESSAGES = {
     "EXCEL_READ_TIME": "读取Excel文件耗时: {:.2f}秒",
     "TOTAL_TIME": "总用时: {:.2f}秒",
     "CANCELLED": "操作已取消",
-    "BATCH_COMPLETED": "批次生成完成: 第{}批 - 共{}个二维码，用时: {:.2f}秒"
+    "BATCH_COMPLETED": "批次生成完成: 第{}批 - 共{}个二维码，用时: {:.2f}秒",
+    "SHUTDOWN_COMPLETE": "线程池已关闭，资源已释放"
 }

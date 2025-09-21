@@ -47,6 +47,7 @@ class QRCodeGeneratorGUI:
         self.output_dir_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
         self.batch_size_var = tk.StringVar(value=str(BATCH_SIZE_EXCEL))
         self.qr_length_var = tk.StringVar(value=str(DEFAULT_QR_LENGTH))  # 二维码边长，单位厘米
+        self.title_var = tk.StringVar(value="物料S/N清单")  # A4页面标题，默认为"物料S/N清单"
         
         # 标志变量
         self.is_generating = False
@@ -100,6 +101,10 @@ class QRCodeGeneratorGUI:
         # 二维码边长设置
         ttk.Label(settings_frame, text="二维码边长(cm)：", font=self.font).grid(row=1, column=0, padx=(0, 5), pady=5, sticky=tk.W)
         ttk.Entry(settings_frame, textvariable=self.qr_length_var, width=10, font=self.font).grid(row=1, column=1, padx=5, pady=5)
+        
+        # A4页面标题设置
+        ttk.Label(settings_frame, text="A4页面标题：", font=self.font).grid(row=2, column=0, padx=(0, 5), pady=5, sticky=tk.W)
+        ttk.Entry(settings_frame, textvariable=self.title_var, width=40, font=self.font).grid(row=2, column=1, columnspan=3, padx=5, pady=5)
         
         # 第三行：进度条
         progress_frame = ttk.Frame(main_frame)
@@ -210,7 +215,7 @@ class QRCodeGeneratorGUI:
         # 在新线程中生成二维码
         self.generation_thread = threading.Thread(
             target=self._generate_qrcodes,
-            args=(excel_file, start_row, output_dir, batch_size, qr_length)
+            args=(excel_file, start_row, output_dir, batch_size, qr_length, self.title_var.get())
         )
         self.generation_thread.daemon = True
         self.generation_thread.start()
@@ -218,7 +223,7 @@ class QRCodeGeneratorGUI:
         # 检查线程是否结束
         self.root.after(100, self._check_thread)
     
-    def _generate_qrcodes(self, excel_file, start_row, output_dir, batch_size, qr_length):
+    def _generate_qrcodes(self, excel_file, start_row, output_dir, batch_size, qr_length, title):
         """生成二维码的主函数"""
         try:
             # 设置取消事件
@@ -288,7 +293,7 @@ class QRCodeGeneratorGUI:
             self.a4_progress = 70  # 初始进度为70%
             self._update_a4_progress()
             
-            qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length)
+            qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length, title=title)
             
             # 取消A4图片生成进度更新定时器
             self._cancel_progress_timers()

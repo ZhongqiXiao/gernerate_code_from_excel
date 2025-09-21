@@ -130,7 +130,8 @@ class QRCodeProcessor:
         """
         import threading
         data, output_dir, start_idx, end_idx = data_group
-        qr_file = os.path.join(output_dir, f"qr_{start_idx}_{end_idx}.png")
+        # 将生成的单张二维码命名加上Excel的行编号
+        qr_file = os.path.join(output_dir, f"qr_row_{start_idx}_{end_idx}.png")
         self.create_qr_code(data, qr_file)
         # 返回线程ID
         thread_id = threading.get_ident()
@@ -237,7 +238,7 @@ class QRCodeProcessor:
         
         return qr_files
     
-    def process_a4_page_worker(self, page_data: Tuple[List[Tuple[str, int, int]], str, int, int, int, int]) -> str:
+    def process_a4_page_worker(self, page_data: Tuple[List[Tuple[str, int, int]], str, int, int, int, int, str]) -> str:
         """
         线程工作函数，用于并行处理A4页面
         
@@ -247,15 +248,52 @@ class QRCodeProcessor:
         Returns:
             str: 生成的A4图片文件路径
         """
-        qr_files_group, output_dir, start_i, end_i, rows, cols = page_data
+        qr_files_group, output_dir, start_i, end_i, rows, cols, title = page_data
         
         # 创建A4大小的白色背景图片
         a4_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), color=BACKGROUND_COLOR)
         draw = ImageDraw.Draw(a4_image)
         
-        # 计算二维码的位置
-        qr_width = (A4_WIDTH - 2 * MARGIN_PIXELS) // cols
-        qr_height = (A4_HEIGHT - 2 * MARGIN_PIXELS) // rows
+        # 添加标题（如果有）
+        if title:
+            try:
+                # 根据600 DPI设置字体大小，使打印时字体高度为0.92cm
+                # 计算公式：像素值 = 厘米值 / 2.54厘米/英寸 * DPI值
+                # 0.92 cm / 2.54 cm/inch * 600 DPI ≈ 217 像素
+                font_size = 217  # 标题字体大小，确保打印时高度为0.92cm
+                # 尝试多种中文字体，确保在不同系统上都能正常显示中文
+                for font_name in ['simhei.ttf', 'simkai.ttf', 'msyh.ttc', 'microsoftyahei.ttf', 'simsun.ttc']:
+                    try:
+                        font = ImageFont.truetype(font_name, font_size)
+                        break
+                    except:
+                        continue
+                else:
+                    # 如果所有中文字体都尝试失败，回退到默认字体
+                    font = ImageFont.load_default()
+            except:
+                # 如果出现其他异常，使用默认字体
+                font = ImageFont.load_default()
+            
+            # 计算标题位置（居中）
+            title_width, title_height = draw.textbbox((0, 0), title, font=font)[2:4]
+            title_x = (A4_WIDTH - title_width) // 2
+            title_y = MARGIN_PIXELS + 100  # 标题上方留出100像素的额外空白
+            
+            # 绘制标题
+            draw.text((title_x, title_y), title, fill=TEXT_COLOR, font=font)
+            
+            # 为标题增加额外的上边距
+            title_margin = title_height + 250  # 标题下方留出150像素的额外空白，增加与二维码之间的间隙
+        else:
+            title_margin = 0  # 没有标题时不需要额外边距
+        
+        # 计算二维码的位置，考虑标题占用的空间和底部间距
+        available_width = A4_WIDTH - 2 * MARGIN_PIXELS
+        available_height = A4_HEIGHT - 2 * MARGIN_PIXELS - title_margin - MARGIN_PIXELS  # 额外减去底部间距
+        
+        qr_width = available_width // cols
+        qr_height = available_height // rows
         
         # 放置二维码 - 调整元组解构以适应包含线程ID的4元素元组
         for idx, (qr_file, start_num, end_num, _) in enumerate(qr_files_group):
@@ -265,28 +303,17 @@ class QRCodeProcessor:
                 # 调整二维码大小，使用LANCZOS算法保持高质量
                 qr_img = qr_img.resize((qr_width, qr_height), Image.Resampling.LANCZOS)
                 
-                # 计算位置
+                # 计算位置，考虑标题占用的空间
                 col = idx % cols
                 row = idx // cols
                 x = MARGIN_PIXELS + col * qr_width
-                y = MARGIN_PIXELS + row * qr_height
+                y = MARGIN_PIXELS + title_margin + row * qr_height
                 
                 # 粘贴二维码到A4图片
                 a4_image.paste(qr_img, (x, y))
                 
-                # 添加文字说明（起止编号）
-                try:
-                    # 尝试使用系统字体
-                    font = ImageFont.truetype(TEXT_FONT, TEXT_FONT_SIZE)
-                except:
-                    # 如果找不到字体，使用默认字体
-                    font = ImageFont.load_default()
-                
-                text = f"{start_num}-{end_num}"
-                text_width, text_height = draw.textbbox((0, 0), text, font=font)[2:4]
-                text_x = x + (qr_width - text_width) // 2
-                text_y = y + qr_height + 20  # 增加与二维码的间距
-                draw.text((text_x, text_y), text, fill=TEXT_COLOR, font=font)
+                # 去掉A4纸上底部的编号范围，保留二维码图片
+                pass
                 
             except Exception as e:
                 self.logger['error'](f"处理二维码 {qr_file} 时出错: {e}")
@@ -301,7 +328,7 @@ class QRCodeProcessor:
         
         return ""
     
-    def create_a4_image(self, qr_files: List[Tuple[str, int, int]], output_dir: str, qr_length_cm: float = DEFAULT_QR_LENGTH) -> None:
+    def create_a4_image(self, qr_files: List[Tuple[str, int, int]], output_dir: str, qr_length_cm: float = DEFAULT_QR_LENGTH, title: str = "物料S/N清单") -> None:
         """
         使用多线程并行生成A4大小的图片
         
@@ -313,9 +340,23 @@ class QRCodeProcessor:
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
         
-        # 计算行列数
-        rows, cols = calculate_a4_layout(qr_length_cm)
+        # 计算基础行列数
+        base_rows, cols = calculate_a4_layout(qr_length_cm)
         
+        # 如果有标题，需要考虑标题占用的高度，调整行数
+        # 这里估算标题高度，并适当减少行数以确保二维码底部有足够间距
+        if title:
+            # 估算标题区域高度（包括边距和留白）
+            estimated_title_height = 217 + 100 + 250  # 字体大小 + 上方留白 + 下方留白
+            # 计算考虑标题后的可用高度
+            effective_height_with_title = A4_HEIGHT - 2 * MARGIN_PIXELS - estimated_title_height - MARGIN_PIXELS  # 额外减去底部间距
+            # 重新计算行数
+            qr_length_px = int(qr_length_cm / 2.54 * IMAGE_DPI)
+            rows = effective_height_with_title // qr_length_px
+            rows = max(1, rows)  # 确保至少有1行
+        else:
+            rows = base_rows
+            
         # 计算每页二维码数量
         qr_per_page = rows * cols
         
@@ -331,7 +372,7 @@ class QRCodeProcessor:
         
         # 提交所有任务到可重用的线程池
         future_to_idx = {
-            self.image_thread_pool.submit(self.process_a4_page_worker, task): i 
+            self.image_thread_pool.submit(self.process_a4_page_worker, task + (title,)): i 
             for i, task in enumerate(tasks)
         }
         
@@ -376,8 +417,8 @@ class QRCodeProcessor:
             self.image_thread_pool.shutdown(wait=True)
             # 移除了错误的error_msg日志调用，因为error_msg只在异常情况下定义
         
-        end_time = time.time()
-        info_msg = INFO_MESSAGES["IMAGE_GENERATION_COMPLETE"].format(end_time - start_time)
+        # 不记录完成时间，因为start_time变量在shutdown方法中未定义
+        info_msg = INFO_MESSAGES["SHUTDOWN_COMPLETE"]
         self.logger['info'](info_msg)
 
 # 创建全局实例，方便其他模块直接导入使用
