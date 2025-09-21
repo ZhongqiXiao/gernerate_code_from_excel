@@ -59,7 +59,7 @@ def generate_large_test_data(output_file, total_rows=100000, batch_size=10000):
 
 if __name__ == "__main__":
     # 输出文件路径
-    output_file = "large_test_data2.xlsx"
+    output_file = "large_test_data3.xlsx"
     
     # 生成10万行测试数据
-    generate_large_test_data(output_file, total_rows=100000)
+    generate_large_test_data(output_file, total_rows=10000)

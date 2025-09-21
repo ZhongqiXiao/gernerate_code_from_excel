@@ -9,13 +9,43 @@ import multiprocessing
 
 # 系统设置
 MAX_WORKERS = os.cpu_count() or 4  # 根据CPU核心数自动调整线程数
-MAX_IMAGE_WORKERS = min(MAX_WORKERS, 2)  # 图像处理对内存要求较高，限制线程数
+MAX_IMAGE_WORKERS = min(MAX_WORKERS, 4)  # 图像处理对内存要求较高，限制线程数
 
 # 文件处理设置
 BATCH_SIZE_EXCEL = 5000  # Excel文件读取的批次大小
 BATCH_SIZE_QR = 100  # 二维码生成的批处理大小
 QR_PER_IMAGE = 10  # 每个二维码图片包含的字符串数量
 QR_PER_A4 = 15  # 每个A4页面包含的二维码数量
+DEFAULT_QR_LENGTH = 3  # 二维码默认边长，单位厘米
+
+# 辅助函数：根据二维码边长计算A4页面上可容纳的行列数
+def calculate_a4_layout(qr_length_cm=DEFAULT_QR_LENGTH):
+    """
+    根据二维码边长计算A4页面上可容纳的最佳行列数
+    
+    Args:
+        qr_length_cm (float): 二维码边长，单位厘米
+        
+    Returns:
+        tuple: (rows, cols) - 最佳行数和列数
+    """
+    # 计算二维码边长（像素）
+    # 1英寸 = 2.54厘米，600 DPI表示每英寸600像素
+    qr_length_px = int(qr_length_cm / 2.54 * IMAGE_DPI)
+    
+    # 计算有效区域（减去边距）
+    effective_width = A4_WIDTH - 2 * MARGIN_PIXELS
+    effective_height = A4_HEIGHT - 2 * MARGIN_PIXELS
+    
+    # 计算行列数（向下取整，确保二维码不会超出页面）
+    cols = effective_width // qr_length_px
+    rows = effective_height // qr_length_px
+    
+    # 确保至少有1行1列
+    cols = max(1, cols)
+    rows = max(1, rows)
+    
+    return rows, cols
 
 # 二维码设置
 QR_VERSION = 2  # 二维码版本，增加版本以容纳更多数据

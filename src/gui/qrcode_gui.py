@@ -22,7 +22,13 @@ if src_path not in sys.path:
 
 # 从core模块导入
 from core.qrcode_processor import qr_processor, set_cancel_event, clear_cancel_event
-from core.config import *
+from core.config import (
+    APP_NAME, APP_GEOMETRY, RESIZABLE_WIDTH, RESIZABLE_HEIGHT,
+    UI_FONT, DEFAULT_START_ROW, DEFAULT_OUTPUT_DIR, BATCH_SIZE_EXCEL,
+    DEFAULT_QR_LENGTH, QR_PER_IMAGE, get_temp_qr_dir,
+    ERROR_TITLES, ERROR_MESSAGES, WARNING_TITLES, WARNING_MESSAGES,
+    INFO_MESSAGES, SUCCESS_TITLES, SUCCESS_MESSAGES
+)
 
 class QRCodeGeneratorGUI:
     def __init__(self, root):
@@ -40,6 +46,7 @@ class QRCodeGeneratorGUI:
         self.start_row_var = tk.StringVar(value=str(DEFAULT_START_ROW))
         self.output_dir_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
         self.batch_size_var = tk.StringVar(value=str(BATCH_SIZE_EXCEL))
+        self.qr_length_var = tk.StringVar(value=str(DEFAULT_QR_LENGTH))  # 二维码边长，单位厘米
         
         # 标志变量
         self.is_generating = False
@@ -89,6 +96,10 @@ class QRCodeGeneratorGUI:
         
         ttk.Label(settings_frame, text="批次大小：", font=self.font).grid(row=0, column=5, padx=(20, 5), pady=5, sticky=tk.W)
         ttk.Entry(settings_frame, textvariable=self.batch_size_var, width=10, font=self.font).grid(row=0, column=6, padx=5, pady=5)
+        
+        # 二维码边长设置
+        ttk.Label(settings_frame, text="二维码边长(cm)：", font=self.font).grid(row=1, column=0, padx=(0, 5), pady=5, sticky=tk.W)
+        ttk.Entry(settings_frame, textvariable=self.qr_length_var, width=10, font=self.font).grid(row=1, column=1, padx=5, pady=5)
         
         # 第三行：进度条
         progress_frame = ttk.Frame(main_frame)
@@ -165,6 +176,14 @@ class QRCodeGeneratorGUI:
             messagebox.showerror(ERROR_TITLES["INPUT_ERROR"], ERROR_MESSAGES["INVALID_BATCH_SIZE"])
             return
         
+        try:
+            qr_length = float(self.qr_length_var.get())
+            if qr_length <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror(ERROR_TITLES["INPUT_ERROR"], "二维码边长必须为大于0的数字")
+            return
+        
         output_dir = self.output_dir_var.get()
         if not os.path.exists(output_dir):
             try:
@@ -191,7 +210,7 @@ class QRCodeGeneratorGUI:
         # 在新线程中生成二维码
         self.generation_thread = threading.Thread(
             target=self._generate_qrcodes,
-            args=(excel_file, start_row, output_dir, batch_size)
+            args=(excel_file, start_row, output_dir, batch_size, qr_length)
         )
         self.generation_thread.daemon = True
         self.generation_thread.start()
@@ -199,7 +218,7 @@ class QRCodeGeneratorGUI:
         # 检查线程是否结束
         self.root.after(100, self._check_thread)
     
-    def _generate_qrcodes(self, excel_file, start_row, output_dir, batch_size):
+    def _generate_qrcodes(self, excel_file, start_row, output_dir, batch_size, qr_length):
         """生成二维码的主函数"""
         try:
             # 设置取消事件
@@ -269,7 +288,7 @@ class QRCodeGeneratorGUI:
             self.a4_progress = 70  # 初始进度为70%
             self._update_a4_progress()
             
-            qr_processor.create_a4_image(qr_files, output_dir)
+            qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length)
             
             # 取消A4图片生成进度更新定时器
             self._cancel_progress_timers()
@@ -419,12 +438,16 @@ def main():
             app.cancel_generation()
             # 给取消操作一些时间完成，然后强制销毁窗口
             def force_close():
+                # 关闭线程池
+                qr_processor.shutdown()
                 # 无论如何都要销毁窗口，确保程序退出
                 root.destroy()
             
             # 设置一个计时器来强制关闭
             root.after(1000, force_close)
         else:
+            # 关闭线程池
+            qr_processor.shutdown()
             root.destroy()
     
     # 绑定窗口关闭事件

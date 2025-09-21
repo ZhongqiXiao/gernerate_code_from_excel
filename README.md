@@ -1,13 +1,13 @@
-# 二维码生成器
+# QRCodeGenerator
 
-一个高效的批量二维码生成工具，支持从Excel文件读取数据，批量生成二维码并自动排版成A4图片。
+一个高效的批量二维码生成工具，支持从Excel文件读取数据，批量生成二维码并自动排版成A4图片。根据用户指定的二维码边长自动计算最佳的A4页面行列布局。
 
 ## 功能特点
 
 - 从Excel文件批量读取数据生成二维码
 - 支持自定义开始行和批量处理大小
 - 多线程处理，充分利用CPU资源
-- 自动排版二维码为A4图片
+- 根据二维码边长自动计算A4页面的最佳行列布局
 - 提供图形界面（GUI）和命令行接口（CLI）
 - 实时进度显示
 - 详细的操作日志
@@ -57,7 +57,7 @@ QRCodeGenerator.exe
 
 **使用步骤：**
 1. 点击"浏览..."按钮选择Excel文件
-2. 设置开始行、输出目录和批次大小
+2. 设置开始行、输出目录、批次大小和二维码边长（单位：厘米）
 3. 点击"开始生成"按钮
 4. 等待生成完成，查看输出目录
 
@@ -74,6 +74,7 @@ python src/qrcode_cli.py [Excel文件路径] [开始行] [选项]
 **选项：**
 - `--output_dir`：指定输出目录（默认为当前目录下的output文件夹）
 - `--batch_size`：指定分批读取的批次大小（默认为100）
+- `--qr_length`：指定二维码边长（单位：厘米，默认为3厘米）
 
 **示例：**
 
@@ -86,6 +87,9 @@ python src/qrcode_cli.py data.xlsx 5
 
 # 自定义输出目录和批次大小
 python src/qrcode_cli.py data.xlsx 1 --output_dir ./results --batch_size 200
+
+# 自定义二维码边长（4厘米）
+python src/qrcode_cli.py data.xlsx 1 --qr_length 4
 ```
 
 ## 配置说明
@@ -95,7 +99,7 @@ python src/qrcode_cli.py data.xlsx 1 --output_dir ./results --batch_size 200
 - 线程池大小
 - 批处理大小
 - 二维码尺寸和纠错级别
-- A4图片布局
+- 默认二维码边长（DEFAULT_QR_LENGTH，单位：厘米）
 - 字体设置
 - 颜色配置
 - 日志级别

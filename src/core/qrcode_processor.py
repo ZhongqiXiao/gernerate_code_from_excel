@@ -20,6 +20,7 @@ sys.path.append(src_dir)
 
 # 从core模块导入config
 from core.config import *
+from core.config import calculate_a4_layout
 
 class QRCodeProcessor:
     """
@@ -29,6 +30,9 @@ class QRCodeProcessor:
     def __init__(self):
         self.logger = self._get_logger()
         self.stop_event = None  # 用于取消操作的事件标志
+        # 创建可重用的线程池，避免每次调用方法时重复创建
+        self.qr_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        self.image_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_IMAGE_WORKERS)
     
     def _get_logger(self):
         """获取日志记录器"""
@@ -167,63 +171,62 @@ class QRCodeProcessor:
         # 使用有序字典来保存结果，确保顺序正确
         result_dict = {}
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # 提交所有任务
-            future_to_idx = {
-                executor.submit(self.generate_qr_code_worker, task): i 
-                for i, task in enumerate(tasks)
-            }
+        # 提交所有任务到可重用的线程池
+        future_to_idx = {
+            self.qr_thread_pool.submit(self.generate_qr_code_worker, task): i 
+            for i, task in enumerate(tasks)
+        }
+        
+        # 收集结果
+        batch_start_time = {}
+        
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
             
-            # 收集结果
-            batch_start_time = {}
+            # 记录批次开始时间
+            if idx not in batch_start_time:
+                batch_start_time[idx] = time.time()
             
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
+            # 检查是否需要取消
+            if self.stop_event and self.stop_event.is_set():
+                # 取消所有未完成的任务
+                for f in future_to_idx:
+                    if not f.done():
+                        f.cancel()
+                break
                 
-                # 记录批次开始时间
-                if idx not in batch_start_time:
-                    batch_start_time[idx] = time.time()
+            try:
+                result = future.result()
+                result_dict[idx] = result
                 
-                # 检查是否需要取消
-                if self.stop_event and self.stop_event.is_set():
-                    # 取消所有未完成的任务
-                    for f in future_to_idx:
-                        if not f.done():
-                            f.cancel()
-                    break
-                    
-                try:
-                    result = future.result()
-                    result_dict[idx] = result
-                    
-                    # 记录批次完成时间和信息
-                    batch_end_time = time.time()
-                    batch_time = batch_end_time - batch_start_time[idx]
-                    
-                    # 提取线程ID（如果结果包含）
-                    thread_id = "N/A"
-                    if len(result) > 3:
-                        thread_id = result[3]
-                    
-                    # 格式化批次信息，包含线程ID
-                    batch_info = INFO_MESSAGES["BATCH_COMPLETED"].format(
-                        idx + 1, 
-                        len(strings[idx*QR_PER_IMAGE:min((idx+1)*QR_PER_IMAGE, len(strings))]), 
-                        batch_time
-                    ) + f" [线程ID: {thread_id}]"
-                    self.logger['info'](batch_info)
-                    
-                    # 调用进度回调函数（如果提供）
-                    if progress_callback:
-                        # 计算已完成的批次数
-                        completed_batches = len([r for r in result_dict.values() if r is not None])
-                        progress_callback(completed_batches)
-                    
-                except concurrent.futures.CancelledError:
-                    self.logger['info'](f"任务 {idx} 已取消")
-                except Exception as e:
-                    error_msg = ERROR_MESSAGES["QR_GENERATION_ERROR"].format(idx, str(e))
-                    self.logger['error'](error_msg)
+                # 记录批次完成时间和信息
+                batch_end_time = time.time()
+                batch_time = batch_end_time - batch_start_time[idx]
+                
+                # 提取线程ID（如果结果包含）
+                thread_id = "N/A"
+                if len(result) > 3:
+                    thread_id = result[3]
+                
+                # 格式化批次信息，不包含线程ID以避免误解
+                batch_info = INFO_MESSAGES["BATCH_COMPLETED"].format(
+                    idx + 1, 
+                    len(strings[idx*QR_PER_IMAGE:min((idx+1)*QR_PER_IMAGE, len(strings))]), 
+                    batch_time
+                )
+                self.logger['info'](batch_info)
+                
+                # 调用进度回调函数（如果提供）
+                if progress_callback:
+                    # 计算已完成的批次数
+                    completed_batches = len([r for r in result_dict.values() if r is not None])
+                    progress_callback(completed_batches)
+                
+            except concurrent.futures.CancelledError:
+                self.logger['info'](f"任务 {idx} 已取消")
+            except Exception as e:
+                error_msg = ERROR_MESSAGES["QR_GENERATION_ERROR"].format(idx, str(e))
+                self.logger['error'](error_msg)
         
         # 按原始顺序重建结果列表
         qr_files = [result_dict[i] for i in sorted(result_dict.keys())]
@@ -234,25 +237,23 @@ class QRCodeProcessor:
         
         return qr_files
     
-    def process_a4_page_worker(self, page_data: Tuple[List[Tuple[str, int, int]], str, int, int]) -> str:
+    def process_a4_page_worker(self, page_data: Tuple[List[Tuple[str, int, int]], str, int, int, int, int]) -> str:
         """
         线程工作函数，用于并行处理A4页面
         
         Args:
-            page_data (Tuple): 包含二维码文件组、输出目录和索引的元组
+            page_data (Tuple): 包含二维码文件组、输出目录、索引和行列数的元组
         
         Returns:
             str: 生成的A4图片文件路径
         """
-        qr_files_group, output_dir, start_i, end_i = page_data
+        qr_files_group, output_dir, start_i, end_i, rows, cols = page_data
         
         # 创建A4大小的白色背景图片
         a4_image = Image.new('RGB', (A4_WIDTH, A4_HEIGHT), color=BACKGROUND_COLOR)
         draw = ImageDraw.Draw(a4_image)
         
-        # 计算二维码的位置（固定3列5行的布局，即使不满也保持留白）
-        cols = 3
-        rows = 5  # 固定5行，确保与满页布局一致
+        # 计算二维码的位置
         qr_width = (A4_WIDTH - 2 * MARGIN_PIXELS) // cols
         qr_height = (A4_HEIGHT - 2 * MARGIN_PIXELS) // rows
         
@@ -300,59 +301,79 @@ class QRCodeProcessor:
         
         return ""
     
-    def create_a4_image(self, qr_files: List[Tuple[str, int, int]], output_dir: str) -> None:
+    def create_a4_image(self, qr_files: List[Tuple[str, int, int]], output_dir: str, qr_length_cm: float = DEFAULT_QR_LENGTH) -> None:
         """
         使用多线程并行生成A4大小的图片
         
         Args:
             qr_files (List[Tuple]): 二维码文件路径和索引范围的元组列表
             output_dir (str): 输出目录路径
+            qr_length_cm (float): 二维码边长，单位厘米，默认为配置文件中的DEFAULT_QR_LENGTH
         """
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
         
+        # 计算行列数
+        rows, cols = calculate_a4_layout(qr_length_cm)
+        
+        # 计算每页二维码数量
+        qr_per_page = rows * cols
+        
         # 准备工作任务
         tasks = []
-        for i in range(0, len(qr_files), QR_PER_A4):
-            end_i = min(i + QR_PER_A4, len(qr_files))
+        for i in range(0, len(qr_files), qr_per_page):
+            end_i = min(i + qr_per_page, len(qr_files))
             group = qr_files[i:end_i]
-            tasks.append((group, output_dir, i, end_i))
+            tasks.append((group, output_dir, i, end_i, rows, cols))
         
         # 使用多线程并行处理A4页面
         start_time = time.time()
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_IMAGE_WORKERS) as executor:
-            # 提交所有任务
-            future_to_idx = {
-                executor.submit(self.process_a4_page_worker, task): i 
-                for i, task in enumerate(tasks)
-            }
-            
-            # 收集结果 - 使用列表存储结果，确保按照提交顺序处理
-            results = [None] * len(future_to_idx)
-            for future in concurrent.futures.as_completed(future_to_idx):
-                # 检查是否需要取消
-                if self.stop_event and self.stop_event.is_set():
-                    # 取消所有未完成的任务
-                    for f in future_to_idx:
-                        if not f.done():
-                            f.cancel()
-                    break
-                    
-                idx = future_to_idx[future]
-                try:
-                    results[idx] = future.result()
-                except concurrent.futures.CancelledError:
-                    self.logger['info'](f"A4图片任务 {idx} 已取消")
-                except Exception as e:
-                    error_msg = ERROR_MESSAGES["IMAGE_GENERATION_ERROR"].format(idx, str(e))
-                    self.logger['error'](error_msg)
-            
-            # 按照提交顺序处理结果，确保二维码排列顺序与单线程一致
-            for result in results:
-                if result:
-                    success_msg = SUCCESS_MESSAGES["FILE_GENERATED"].format(result)
-                    self.logger['info'](success_msg)
+        # 提交所有任务到可重用的线程池
+        future_to_idx = {
+            self.image_thread_pool.submit(self.process_a4_page_worker, task): i 
+            for i, task in enumerate(tasks)
+        }
+        
+        # 收集结果 - 使用列表存储结果，确保按照提交顺序处理
+        results = [None] * len(future_to_idx)
+        for future in concurrent.futures.as_completed(future_to_idx):
+            # 检查是否需要取消
+            if self.stop_event and self.stop_event.is_set():
+                # 取消所有未完成的任务
+                for f in future_to_idx:
+                    if not f.done():
+                        f.cancel()
+                break
+                
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except concurrent.futures.CancelledError:
+                self.logger['info'](f"A4图片任务 {idx} 已取消")
+            except Exception as e:
+                error_msg = ERROR_MESSAGES["IMAGE_GENERATION_ERROR"].format(idx, str(e))
+                self.logger['error'](error_msg)
+        
+        # 按照提交顺序处理结果，确保二维码排列顺序与单线程一致
+        for result in results:
+            if result:
+                success_msg = SUCCESS_MESSAGES["FILE_GENERATED"].format(result)
+                self.logger['info'](success_msg)
+                
+    def shutdown(self):
+        """
+        关闭线程池，释放资源
+        
+        在线程池不再需要时调用此方法，确保资源被正确释放
+        """
+        # 关闭二维码生成线程池
+        if hasattr(self, 'qr_thread_pool'):
+            self.qr_thread_pool.shutdown(wait=True)
+        
+        # 关闭图像处理线程池
+        if hasattr(self, 'image_thread_pool'):
+            self.image_thread_pool.shutdown(wait=True)
             # 移除了错误的error_msg日志调用，因为error_msg只在异常情况下定义
         
         end_time = time.time()
