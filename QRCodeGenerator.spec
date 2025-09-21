@@ -20,7 +20,8 @@ a = Analysis(
         'pandas._libs.tslibs.nattype',  # pandas相关依赖
         'core',  # 显式添加core模块作为hiddenimport
         'core.qrcode_processor',  # 显式添加core.qrcode_processor模块
-        'core.config'  # 显式添加core.config模块
+        'core.config',  # 显式添加core.config模块
+        'docx'  # 添加python-docx库支持
     ],
     hookspath=[],
     hooksconfig={},

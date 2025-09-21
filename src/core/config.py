@@ -156,12 +156,17 @@ INFO_MESSAGES = {
     "EXCEL_READ_COMPLETE": "成功读取{}条数据",
     "START_QR_GENERATION": "开始生成二维码...(共{}批，使用多线程加速)",
     "START_IMAGE_GENERATION": "开始生成A4图片...(使用多线程加速)",
+    "START_DOCX_GENERATION": "开始生成Word文档...",
     "QR_GENERATION_COMPLETE": "生成{}个二维码耗时: {:.2f}秒",
     "IMAGE_GENERATION_COMPLETE": "生成A4图片耗时: {:.2f}秒",
+    "DOCX_GENERATION_COMPLETE": "Word文档生成完成",
     "COMPLETE": "所有操作完成！",
     "EXCEL_READ_TIME": "读取Excel文件耗时: {:.2f}秒",
     "TOTAL_TIME": "总用时: {:.2f}秒",
     "CANCELLED": "操作已取消",
     "BATCH_COMPLETED": "批次生成完成: 第{}批 - 共{}个二维码，用时: {:.2f}秒",
-    "SHUTDOWN_COMPLETE": "线程池已关闭，资源已释放"
+    "SHUTDOWN_COMPLETE": "线程池已关闭，资源已释放",
+    "DOCX_FILE_GENERATED": "Word文档已生成: {}",
+    "DOCX_GENERATION_FAILED": "Word文档生成失败",
+    "TRYING_IMAGE_AS_FALLBACK": "尝试生成A4图片作为备选..."
 }

@@ -14,6 +14,16 @@ import concurrent.futures
 import time
 from typing import List, Tuple, Dict
 
+# 尝试导入python-docx库
+try:
+    from docx import Document
+    from docx.shared import Inches, Cm, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
 # 添加src目录到Python路径
 src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(src_dir)
@@ -402,6 +412,114 @@ class QRCodeProcessor:
                 success_msg = SUCCESS_MESSAGES["FILE_GENERATED"].format(result)
                 self.logger['info'](success_msg)
                 
+    def create_docx_document(self, qr_files: List[Tuple[str, int, int]], output_dir: str, qr_length_cm: float = DEFAULT_QR_LENGTH, title: str = "物料S/N清单") -> str:
+        """
+        创建Word文档，将二维码以表格形式排列，方便用户自行排版
+        
+        Args:
+            qr_files (List[Tuple]): 二维码文件路径和索引范围的元组列表
+            output_dir (str): 输出目录路径
+            qr_length_cm (float): 二维码边长，单位厘米
+            title (str): 文档标题
+            
+        Returns:
+            str: 生成的Word文档路径
+        """
+        if not DOCX_AVAILABLE:
+            self.logger['error']("python-docx库未安装，无法生成Word文档")
+            return ""
+        
+        try:
+            # 确保输出目录存在
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 创建新的Word文档
+            doc = Document()
+            
+            # 设置页面边距为1厘米
+            sections = doc.sections
+            for section in sections:
+                section.top_margin = Cm(1)
+                section.bottom_margin = Cm(1)
+                section.left_margin = Cm(1)
+                section.right_margin = Cm(1)
+            
+            # 添加标题
+            if title:
+                title_para = doc.add_heading(title, level=0)
+                title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # 计算每页二维码数量（以A4纸为基准）
+            # 假设页面宽度约为21厘米，左右边距各1厘米，实际可用宽度约为19厘米
+            page_width_cm = 19
+            # 假设页面高度约为29.7厘米，上下边距各1厘米，实际可用高度约为27.7厘米
+            page_height_cm = 27.7
+            
+            # 计算每行可以放置的二维码数量
+            cols = int(page_width_cm // (qr_length_cm + 0.5))  # 0.5厘米间隔
+            cols = max(1, cols)
+            
+            # 计算每列可以放置的二维码数量
+            rows = int(page_height_cm // (qr_length_cm + 0.5))  # 0.5厘米间隔
+            rows = max(1, rows)
+            
+            # 根据行列数计算每页二维码数量
+            qr_per_page = cols * rows
+            
+            # 将二维码按页分组
+            for page_idx in range(0, len(qr_files), qr_per_page):
+                page_qr_files = qr_files[page_idx:page_idx + qr_per_page]
+                
+                # 添加分页符（除了第一页）
+                if page_idx > 0:
+                    doc.add_page_break()
+                
+                # 创建表格来放置二维码
+                rows = math.ceil(len(page_qr_files) / cols)
+                table = doc.add_table(rows=rows, cols=cols)
+                table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # 调整表格列宽
+                for col in table.columns:
+                    col.width = Cm(qr_length_cm + 0.5)
+                
+                # 填充表格
+                for idx, qr_tuple in enumerate(page_qr_files):
+                    # 解包元组，只获取前3个元素（忽略线程ID）
+                    qr_file, start_idx, end_idx = qr_tuple[:3]
+                    row_idx = idx // cols
+                    col_idx = idx % cols
+                    
+                    # 获取单元格
+                    cell = table.cell(row_idx, col_idx)
+                    
+                    # 在单元格中添加二维码图片
+                    try:
+                        # 计算图片在Word中的大小（厘米）
+                        qr_length_inches = qr_length_cm / 2.54
+                        cell.paragraphs[0].add_run().add_picture(qr_file, width=Inches(qr_length_inches))
+                        
+                        # 在图片下方添加编号（可选）
+                        # run = cell.paragraphs[0].add_run(f"{start_idx}-{end_idx}")
+                        # run.font.size = Pt(8)
+                        
+                        # 居中对齐
+                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    except Exception as e:
+                        self.logger['error'](f"添加二维码 {qr_file} 到Word文档时出错: {e}")
+                        continue
+            
+            # 保存Word文档
+            output_file = os.path.join(output_dir, "二维码清单.docx")
+            doc.save(output_file)
+            
+            self.logger['info'](f"Word文档已生成: {output_file}")
+            return output_file
+        except Exception as e:
+            error_msg = f"生成Word文档时出错: {str(e)}"
+            self.logger['error'](error_msg)
+            return ""
+    
     def shutdown(self):
         """
         关闭线程池，释放资源

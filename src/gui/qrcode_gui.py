@@ -29,6 +29,7 @@ from core.config import (
     ERROR_TITLES, ERROR_MESSAGES, WARNING_TITLES, WARNING_MESSAGES,
     INFO_MESSAGES, SUCCESS_TITLES, SUCCESS_MESSAGES
 )
+from core.qrcode_processor import DOCX_AVAILABLE
 
 class QRCodeGeneratorGUI:
     def __init__(self, root):
@@ -48,6 +49,7 @@ class QRCodeGeneratorGUI:
         self.batch_size_var = tk.StringVar(value=str(BATCH_SIZE_EXCEL))
         self.qr_length_var = tk.StringVar(value=str(DEFAULT_QR_LENGTH))  # 二维码边长，单位厘米
         self.title_var = tk.StringVar(value="物料S/N清单")  # A4页面标题，默认为"物料S/N清单"
+        self.output_format_var = tk.StringVar(value="image")  # 输出格式，默认为图片
         
         # 标志变量
         self.is_generating = False
@@ -101,6 +103,21 @@ class QRCodeGeneratorGUI:
         # 二维码边长设置
         ttk.Label(settings_frame, text="二维码边长(cm)：", font=self.font).grid(row=1, column=0, padx=(0, 5), pady=5, sticky=tk.W)
         ttk.Entry(settings_frame, textvariable=self.qr_length_var, width=10, font=self.font).grid(row=1, column=1, padx=5, pady=5)
+        
+        # 输出格式设置
+        if DOCX_AVAILABLE:
+            ttk.Label(settings_frame, text="输出格式：", font=self.font).grid(row=1, column=2, padx=(20, 5), pady=5, sticky=tk.W)
+            output_format_frame = ttk.Frame(settings_frame)
+            output_format_frame.grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
+            
+            # 添加单选按钮组
+            ttk.Radiobutton(output_format_frame, text="图片", variable=self.output_format_var, value="image", style='TRadiobutton').pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(output_format_frame, text="Word文档", variable=self.output_format_var, value="docx", style='TRadiobutton').pack(side=tk.LEFT, padx=5)
+        else:
+            # 如果python-docx库不可用，隐藏Word文档选项
+            ttk.Label(settings_frame, text="输出格式：图片 (Word文档功能需要python-docx库)", font=self.font).grid(row=1, column=2, columnspan=2, padx=(20, 5), pady=5, sticky=tk.W)
+            # 确保输出格式为图片
+            self.output_format_var.set("image")
         
         # A4页面标题设置
         ttk.Label(settings_frame, text="A4页面标题：", font=self.font).grid(row=2, column=0, padx=(0, 5), pady=5, sticky=tk.W)
@@ -284,19 +301,49 @@ class QRCodeGeneratorGUI:
             if self.stop_event.is_set():
                 return
             
-            # 4. 生成A4图片
-            self._log_gui(INFO_MESSAGES["START_IMAGE_GENERATION"])
-            self._log_console(INFO_MESSAGES["START_IMAGE_GENERATION"])
-            self._update_progress(70, "开始生成A4图片...")
+            # 4. 根据用户选择的输出格式生成相应的文件
+            output_format = self.output_format_var.get()
             
-            # 添加进度更新定时器
-            self.a4_progress = 70  # 初始进度为70%
-            self._update_a4_progress()
+            if output_format == "image":
+                # 生成A4图片
+                self._log_gui(INFO_MESSAGES["START_IMAGE_GENERATION"])
+                self._log_console(INFO_MESSAGES["START_IMAGE_GENERATION"])
+                self._update_progress(70, "开始生成A4图片...")
+                
+                # 添加进度更新定时器
+                self.a4_progress = 70  # 初始进度为70%
+                self._update_a4_progress()
+                
+                qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length, title=title)
+                
+                # 取消A4图片生成进度更新定时器
+                self._cancel_progress_timers()
+            else:
+                # 生成Word文档
+                self._log_gui(INFO_MESSAGES["START_DOCX_GENERATION"])
+                self._log_console(INFO_MESSAGES["START_DOCX_GENERATION"])
+                self._update_progress(70, INFO_MESSAGES["START_DOCX_GENERATION"])
+                
+                # 添加进度更新定时器
+                self.a4_progress = 70  # 初始进度为70%
+                self._update_a4_progress()
+                
+                docx_file = qr_processor.create_docx_document(qr_files, output_dir, qr_length_cm=qr_length, title=title)
+                
+                if docx_file:
+                    self._log_gui(INFO_MESSAGES["DOCX_FILE_GENERATED"].format(docx_file))
+                    self._log_console(INFO_MESSAGES["DOCX_FILE_GENERATED"].format(docx_file))
+                else:
+                    self._log_gui(INFO_MESSAGES["DOCX_GENERATION_FAILED"])
+                    self._log_console(INFO_MESSAGES["DOCX_GENERATION_FAILED"])
+                    # 如果Word文档生成失败，尝试生成图片作为备选
+                    self._log_gui(INFO_MESSAGES["TRYING_IMAGE_AS_FALLBACK"])
+                    self._log_console(INFO_MESSAGES["TRYING_IMAGE_AS_FALLBACK"])
+                    qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length, title=title)
+                
+                # 取消进度更新定时器
+                self._cancel_progress_timers()
             
-            qr_processor.create_a4_image(qr_files, output_dir, qr_length_cm=qr_length, title=title)
-            
-            # 取消A4图片生成进度更新定时器
-            self._cancel_progress_timers()
             self._update_progress(100, "完成")
             
             self._log_gui(INFO_MESSAGES["COMPLETE"])
