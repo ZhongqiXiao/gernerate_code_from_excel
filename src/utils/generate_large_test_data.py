@@ -2,6 +2,7 @@ import pandas as pd
 import random
 import string
 import os
+import pandas as pd  # 导入pandas库
 from tqdm import tqdm  # 用于显示进度条
 
 # 生成单个18位随机字符串（数字+大写字母）
@@ -58,7 +59,7 @@ def generate_large_test_data(output_file, total_rows=100000, batch_size=10000):
 
 if __name__ == "__main__":
     # 输出文件路径
-    output_file = "large_test_data.xlsx"
+    output_file = "large_test_data2.xlsx"
     
     # 生成10万行测试数据
     generate_large_test_data(output_file, total_rows=100000)
